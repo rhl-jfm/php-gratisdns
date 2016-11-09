@@ -186,7 +186,7 @@ class GratisDNS {
    * @param string $preference
    * @param integer $weight
    * @param integer $port
-   * @return type
+   * @return boolean
    */
   function createRecord($domain, $type, $host, $data, $ttl = false, $preference = false, $weight = false, $port = false) {
     $post_array = array(
@@ -233,10 +233,9 @@ class GratisDNS {
     if ($response && $ttl) {
       // Here be Dragons, recommend not to use this feature.
       $record = $this->getRecordByDomain($domain, $type, $host);
-      $html = $this->updateRecord($domain, $record['recordid'], $type, $host, $data, $ttl);
-      return $this->_response($html);
+      return $this->updateRecord($domain, $record['recordid'], $type, $host, $data, $ttl);
     } else {
-      return $this->_response($html);
+      return $response;
     }
   }
 
