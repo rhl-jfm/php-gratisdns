@@ -14,6 +14,7 @@ use TrueBV\Punycode;
 class GratisDNS {
   private $username;
   private $password;
+  private $punycode;
   public $admin_url = 'https://oldsystem.gratisdns.dk/editdomains4.phtml';
   public $curl = null;
   public $domain = null;
@@ -26,6 +27,8 @@ class GratisDNS {
     require_once __DIR__.'/simple_html_dom.php';
     $this->username = $username;
     $this->password = $password;
+
+    $this->punycode = new Punycode();
 
     if (!function_exists('curl_init')) {
       throw new Exception('php cURL extension must be installed and enabled');
@@ -82,9 +85,10 @@ class GratisDNS {
   }
 
   function getRecordByDomain($domain, $type, $host) {
-      $domaininfo = $this->getRecords($domain);
-      if ($domaininfo) {
-        if (isset($domaininfo[$type])) {
+    $domaininfo = $this->getRecords($domain);
+    $host = $this->punycode->decode($host);
+    if ($domaininfo) {
+      if (isset($domaininfo[$type])) {
         foreach ($domaininfo[$type] as $record) {
           if ($record['host'] === $host) {
             return $record;
@@ -402,12 +406,7 @@ class GratisDNS {
     $htmldom = new simple_html_dom();
     $htmldom->load($html);
     $this->response = trim(utf8_encode($htmldom->find('td[class=systembesked]',0)->innertext));
-      $search_domain = $this->domain;
-      if (preg_match('/^xn--/', $search_domain)) {
-          $punycode = new Punycode();
-          $search_domain = $punycode->decode($search_domain);
-      }
-    $positive_messages = array('successfyldt', 'er oprettet', 'er slettet', $search_domain);
+    $positive_messages = array('successfyldt', 'er oprettet', 'er slettet', $this->punycode->decode($this->domain));
     foreach ($positive_messages as $positive_message) {
       if ( strstr($this->response, $positive_message) ) {
         return true;
