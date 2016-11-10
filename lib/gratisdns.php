@@ -115,7 +115,7 @@ class GratisDNS {
     $html = $this->_request(array('action' => 'changeDNSsetup', 'user_domain' => $domain));
     $htmldom = new simple_html_dom();
     $htmldom->load($html);
-echo($html);
+
     if ($this->_response($html)) {
       $this->records[$domain] = array();
       foreach($htmldom->find('tr[class=BODY1BG],tr[class=BODY2BG]') as $tr) {
