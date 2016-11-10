@@ -1,4 +1,6 @@
 <?php
+use TrueBV\Punycode;
+
 /**
  * ProjectName: php-gratisdns
  * Plugin URI: http://github.com/kasperhartwich/php-gratisdns
@@ -80,9 +82,9 @@ class GratisDNS {
   }
 
   function getRecordByDomain($domain, $type, $host) {
-    $domaininfo = $this->getRecords($domain);
-    if ($domaininfo) {
-      if (isset($domaininfo[$type])) {
+      $domaininfo = $this->getRecords($domain);
+      if ($domaininfo) {
+        if (isset($domaininfo[$type])) {
         foreach ($domaininfo[$type] as $record) {
           if ($record['host'] === $host) {
             return $record;
@@ -113,7 +115,7 @@ class GratisDNS {
     $html = $this->_request(array('action' => 'changeDNSsetup', 'user_domain' => $domain));
     $htmldom = new simple_html_dom();
     $htmldom->load($html);
-
+echo($html);
     if ($this->_response($html)) {
       $this->records[$domain] = array();
       foreach($htmldom->find('tr[class=BODY1BG],tr[class=BODY2BG]') as $tr) {
@@ -400,7 +402,12 @@ class GratisDNS {
     $htmldom = new simple_html_dom();
     $htmldom->load($html);
     $this->response = trim(utf8_encode($htmldom->find('td[class=systembesked]',0)->innertext));
-    $positive_messages = array('successfyldt', 'er oprettet', 'er slettet', $this->domain);
+      $search_domain = $this->domain;
+      if (preg_match('/^xn--/', $search_domain)) {
+          $punycode = new Punycode();
+          $search_domain = $punycode->decode($search_domain);
+      }
+    $positive_messages = array('successfyldt', 'er oprettet', 'er slettet', $search_domain);
     foreach ($positive_messages as $positive_message) {
       if ( strstr($this->response, $positive_message) ) {
         return true;
