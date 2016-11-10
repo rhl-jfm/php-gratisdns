@@ -82,10 +82,15 @@ class GratisDNS {
   function getRecordByDomain($domain, $type, $host) {
     $domaininfo = $this->getRecords($domain);
     if ($domaininfo) {
-      if (isset($domaininfo[$type][$host])) {
-        return $domaininfo[$type][$host];
-      } else {
+      if (isset($domaininfo[$type])) {
+        foreach ($domaininfo[$type] as $record) {
+          if ($record['host'] === $host) {
+            return $record;
+          }
+        }
         return $this->error("Unknown host '" . $host . "' for recordtype '" . $type . "'");
+      } else {
+        return $this->error("No hosts found for recordtype '" . $type . "'");
       }
     } else {
       return false;
@@ -113,7 +118,7 @@ class GratisDNS {
       $this->records[$domain] = array();
       foreach($htmldom->find('tr[class=BODY1BG],tr[class=BODY2BG]') as $tr) {
         $type = $tr->parent()->find('td[class=TITLBG] b', 0)->innertext;
-        if (in_array($type, array('A', 'AAAA', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'))) {
+        if (in_array($type, array('A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'))) {
           if (!isset($this->records[$domain][$type])) {$this->records[$domain][$type] = array();}
           $tds = $tr->find('td');
           $recordid = $tr->find('td form input[name=recordid]', 0) ? (int)$tr->find('td form input[name=recordid]',0)->value : 0;
