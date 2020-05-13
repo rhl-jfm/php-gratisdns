@@ -15,87 +15,55 @@ class GratisDNS
 
     private $password;
 
-    public $admin_url = 'https://oldsystem.gratisdns.dk/editdomains4.phtml';
+    private $cookie_file;
 
-    public $curl = null;
-
-    public $domain = null;
+    private $admin_url = 'https://admin.gratisdns.com';
 
     public $domains = null;
 
     public $records = null;
 
-    public $response = null;
+    private $debug = false;
 
-    public $html = null;
-
-    function __construct($username, $password, $verify_certificate = true)
+    function __construct(string $username, string $password)
     {
         require_once __DIR__ . '/simple_html_dom.php';
         $this->username = $username;
         $this->password = $password;
 
+        $this->cookie_file = tempnam('/tmp', 'cookie');
+        register_shutdown_function('unlink', $this->cookie_file);
+
         if (! function_exists('curl_init')) {
             throw new Exception('php cURL extension must be installed and enabled');
         }
 
-        $this->curl = curl_init();
-        // Having certificates problems: http://curl.haxx.se/docs/sslcerts.html
-        curl_setopt($this->curl, CURLOPT_SSL_VERIFYPEER, $verify_certificate);
-        curl_setopt($this->curl, CURLOPT_URL, $this->admin_url);
-        curl_setopt($this->curl, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($this->curl, CURLOPT_POST, true);
+        $this->performLogin();
     }
 
-    function getDomains($section = 'primary')
+    public function getDomains(): array
     {
-        if ($section == 'primary') {
-            $html = $this->_request(['action' => 'primarydns']);
-        } else {
-            $html = $this->_request(['action' => 'secondarydns']);
-        }
+        $html = $this->performGetRequest('dns_primary_changeDNSsetup');
 
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
 
         $this->domains = [];
-        foreach ($htmldom->find('form[name=domainform] input[name=domain]') as $input) {
-            $this->domains[] = utf8_encode($input->value);
+        foreach ($htmldom->find('a') as $a) {
+            if (preg_match('/action=dns_primary_changeDNSsetup&user_domain=([^&]+)/', $a->attr['href'], $m)) {
+                $this->domains[] = $m[1];
+            }
         }
 
         return $this->domains;
     }
 
-    /**
-     * Retrieve domain ID
-     *
-     * @param string $domain
-     *
-     * @return boolean
-     */
-    public function getDomainId($domain)
+    public function getRecordByDomain(string $domain, string $type, string $host): ?array
     {
-        $html = $this->_request(['action' => 'changeDNSsetup', 'user_domain' => $domain]);
-        $htmldom = new simple_html_dom();
-        $htmldom->load($html);
-
-        if (! $this->_response($html)) {
-            return false;
+        if (empty($this->records[$domain])) {
+            $this->getRecords($domain);
         }
-
-        foreach ($htmldom->find('input[name=domainid]') as $input) {
-            $value = (int) $input->value; // Make suer we get a int so we can use empty() to check value with.
-            if (! empty($value)) {
-                return $value;
-            }
-        }
-
-        return false;
-    }
-
-    function getRecordByDomain($domain, $type, $host)
-    {
-        $domaininfo = $this->getRecords($domain);
+        $domaininfo = $this->records[$domain];
         if ($domaininfo) {
             if (isset($domaininfo[$type])) {
                 foreach ($domaininfo[$type] as $record) {
@@ -104,118 +72,106 @@ class GratisDNS
                     }
                 }
 
-                return $this->error("Unknown host '" . $host . "' for recordtype '" . $type . "'");
+                return null;
             } else {
-                return $this->error("No hosts found for recordtype '" . $type . "'");
+                return null;
             }
         } else {
-            return false;
+            return null;
         }
     }
 
-    function getRecordById($domain, $id)
+    public function getRecordById(string $domain, int $id): ?array
     {
-        if (! $this->getRecords($domain)) {
-            return false;
-        };
-
-        $record = $this->lookupRecord($id);
-        if ($record) {
-            return $record;
+        if (empty($this->records[$domain])) {
+            $this->getRecords($domain);
         }
 
-        return $this->error("Unknown record_id '" . $id . "' for domain '" . $domain . "'");
+        return $this->lookupRecord($id);
     }
 
-    function getRecords($domain)
+    public function getRecords(string $domain): array
     {
-        $html = $this->_request(['action' => 'changeDNSsetup', 'user_domain' => $domain]);
+        $html = $this->performGetRequest('dns_primary_changeDNSsetup', ['user_domain' => $domain]);
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
 
-        if ($this->_response($html)) {
-            $this->records[$domain] = [];
-            foreach ($htmldom->find('tr[class=BODY1BG],tr[class=BODY2BG]') as $tr) {
-                $type = $tr->parent()->find('td[class=TITLBG] b', 0)->innertext;
-                if (in_array($type, ['A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'])) {
-                    if (! isset($this->records[$domain][$type])) {
-                        $this->records[$domain][$type] = [];
-                    }
-                    $tds = $tr->find('td');
-                    $recordid = $tr->find('td form input[name=recordid]',
-                        0) ? (int) $tr->find('td form input[name=recordid]', 0)->value : 0;
-                    $host = (in_array($type, [
-                        'NS',
-                        'SRV',
-                        'TXT',
-                        'MX',
-                    ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext);
-                    $this->records[$domain][$type][$host]['type'] = $type;
-                    $this->records[$domain][$type][$host]['recordid'] = $recordid;
-                    $this->records[$domain][$type][$host]['domainid'] = $tr->find('td form input[name=domainid]',
-                        0) ? (int) $tr->find('td form input[name=domainid]', 0)->value : 0;
-                    $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext);
-                    $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext);
-                    switch ($type) {
-                        case 'A':
-                        case 'AAAA':
-                        case 'CNAME':
-                            $this->records[$domain][$type][$host]['ttl'] = (int) $tds[2]->innertext;
-                            break;
-                        case 'MX':
-                        case 'AFSDB':
-                            if (! $recordid) {
-                                unset($this->records[$domain][$type][$host]);
-                            } else {
-                                $this->records[$domain][$type][$host]['preference'] = $tds[2]->innertext;
-                                $this->records[$domain][$type][$host]['ttl'] = (int) $tds[3]->innertext;
-                            }
-                            break;
-                        case 'TXT':
-                        case 'NS':
-                            //No extra options
-                            break;
-                        case 'SRV':
-                            $this->records[$domain][$type][$host]['priority'] = $tds[2]->innertext;
-                            $this->records[$domain][$type][$host]['weight'] = (int) $tds[3]->innertext;
-                            $this->records[$domain][$type][$host]['port'] = (int) $tds[4]->innertext;
-                            $this->records[$domain][$type][$host]['ttl'] = (int) $tds[5]->innertext;
-                            break;
-                        case 'SSHFP':
-                            //Not supported
-                            break;
-                    }
+        $this->records[$domain] = [];
+        foreach ($htmldom->find('div[class=dns-records]') as $div) {
+            /** @var simple_html_dom_node $div */
+            $type = strtok($div->find('div[class=d-flex] h2', 0)->innertext, ' ');
+            if (!in_array($type, ['A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'])) {
+                continue;
+            }
+            foreach ($div->find('tbody tr') as $tr) {
+                /** @var simple_html_dom_node $tr */
+                $editlink = $tr->find('a[class=btn]', 0);
+                if (empty($editlink)) {
+                    # Skip header rows
+                    continue;
+                }
+                if (! isset($this->records[$domain][$type])) {
+                    $this->records[$domain][$type] = [];
+                }
+                parse_str($editlink->attr['href'], $editparams);
+                $recordid = (int)$editparams['id'];
+
+                $tds = $tr->find('td');
+
+                $host = (in_array($type, [
+                    'NS',
+                    'SRV',
+                    'TXT',
+                    'MX',
+                ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext);
+                $this->records[$domain][$type][$host]['type'] = $type;
+                $this->records[$domain][$type][$host]['recordid'] = $recordid;
+                $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext);
+                $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext);
+                switch ($type) {
+                    case 'TXT':
+                        # Data field may be truncated on the overview page ...
+                        if (substr($this->records[$domain][$type][$host]['data'], -3, 3) == '...') {
+                            $this->records[$domain][$type][$host]['data'] = $this->getRawTxtData($domain, $recordid);
+                        }
+                    case 'A':
+                    case 'AAAA':
+                    case 'CNAME':
+                    case 'NS':
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[2]->innertext;
+                        break;
+                    case 'MX':
+                    case 'AFSDB':
+                        # Work around inconsistency in output
+                        $this->records[$domain][$type][$host]['data'] = trim(strip_tags(utf8_encode($tds[1]->innertext)));
+                        $this->records[$domain][$type][$host]['preference'] = $tds[2]->innertext;
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[3]->innertext;
+                        break;
+                    case 'SRV':
+                        $this->records[$domain][$type][$host]['priority'] = $tds[2]->innertext;
+                        $this->records[$domain][$type][$host]['weight'] = (int) $tds[3]->innertext;
+                        $this->records[$domain][$type][$host]['port'] = (int) $tds[4]->innertext;
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[5]->innertext;
+                        break;
+                    case 'SSHFP':
+                        //Not supported
+                        break;
+                        // TODO: Support CAA records
                 }
             }
-
-            return $this->records[$domain];
-        } else {
-            return false;
         }
+
+        return $this->records[$domain];
     }
 
-    function createDomain($domain, $type = 'primary', $primary_ns = false, $secondary_ns = false)
+    public function createDomain(string $domain): void
     {
-        if ($type == 'primary') {
-            $post_array = ['action' => 'createprimaryandsecondarydnsforthisdomain', 'user_domain' => $domain];
-        } else {
-            $post_array = [
-                'action'         => 'createsecondarydnsforthisdomain',
-                'user_domain'    => $domain,
-                'user_domain_ip' => $primary_ns,
-            ];
-            $post_array['user_domain_ip2'] = ($secondary_ns) ? $secondary_ns : 'xxx.xxx.xxx.xxx';
-        }
-        $html = $this->_request($post_array);
-
-        return $this->_response($html);
+        $this->performPostRequest('createprimaryandsecondarydnsforthisdomain', [ 'user_domain' => $domain ]);
     }
 
-    function deleteDomain($domain)
+    public function deleteDomain(string $domain): void
     {
-        $html = $this->_request(['action' => 'deleteprimarydnsnow', 'user_domain' => $domain]);
-
-        return $this->_response($html);
+        $this->performPostRequest('dns_primary_delete', [ 'user_domain' => $domain ]);
     }
 
     /**
@@ -280,8 +236,8 @@ class GratisDNS
                 $post_array['weight'] = $weight;
                 break;
         }
-        $html = $this->_request($post_array);
-        $response = $this->_response($html);
+        $html = $this->performPostRequest('todo', $post_array);
+        $response = $this->checkResponse($html);
         if ($response && $ttl) {
             // Here be Dragons, recommend not to use this feature.
             $record = $this->getRecordByDomain($domain, $type, $host);
@@ -354,9 +310,9 @@ class GratisDNS
             case 'SSHFP':
                 return $this->error('Not supported.');
         }
-        $html = $this->_request($post_array);
+        $html = $this->performPostRequest('todo', $post_array);
 
-        return $this->_response($html);
+        return $this->checkResponse($html);
     }
 
     function applyTemplate($domain, $template, $ttl = false)
@@ -403,109 +359,155 @@ class GratisDNS
     /**
      * Delete a record
      *
-     * @param string|integer $domain   Domain name or domainid
-     * @param integer        $recordid Record to be deleted
-     * @param string         $type     Record type, this is required if a domainid has been specified
+     * @param string  $domain   Domain name
+     * @param integer $recordid Record to be deleted
      *
      * @return
      */
-    function deleteRecord($domain, $recordid, $type = null)
+    function deleteRecord(string $domain, int $recordid): void
     {
-
-        $have_domain = false;
-        if (is_numeric($domain)) {
-            $domainid = $domain;
-        } else {
-            $domainid = $this->getDomainId($domain);
-            if (! $domainid) {
-                return false;
-            }
-            $have_domain = true;
+        $record = $this->getRecordById($domain, $recordid);
+        if (!$record) {
+            throw new RuntimeException("Record with id $recordid not fount for domain $domain");
         }
 
-        if (! $type) {
-            if (! $have_domain) {
-                throw new \Exception('We dont support using domainid without specifying $type');
-            }
-
-            $record = $this->getRecordById($domain, $recordid);
-            if (! $record) {
-                return false;
-            }
-
-            $type = $record['type'];
-        }
+        $type = $record['type'];
 
         $params = [
-            'action'   => 'deletegeneric',
-            'domainid' => $domainid,
-            'recordid' => $recordid,
-            'typeRR'   => $type,
+            'user_domain' => $domain,
+            'recordid'    => $recordid
         ];
 
-        $html = $this->_request($params);
-
-        return $this->_response($html);
+        $this->performPostRequest('dns_primary_delete_' . lc($type), $params);
     }
 
-    function getResponse()
+    private function performPostRequest(string $action, array $args = [], bool $ignore_errors = false): string
     {
-        return strip_tags(str_replace($this->domain, '', $this->response));
-    }
+        $url = $this->admin_url . ($action ? "?action=" . urlencode($action) : '');
 
-    private function _request($args = [])
-    {
-        if (isset($args['user_domain'])) {
-            $this->domain = $args['user_domain'];
+        $curl = curl_init();
+
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_COOKIEJAR, $this->cookie_file);
+        curl_setopt($curl, CURLOPT_COOKIEFILE, $this->cookie_file);
+
+        curl_setopt($curl, CURLOPT_URL, $url);
+
+        curl_setopt($curl, CURLOPT_POST, true);
+        curl_setopt($curl, CURLOPT_POSTFIELDS, $args);
+
+        $html = curl_exec($curl);
+        $return_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+        if ($this->debug) {
+            var_dump("POST: $url -> $return_code");
         }
-        $post_array = array_merge(['user' => $this->username, 'password' => $this->password], $args);
-        curl_setopt($this->curl, CURLOPT_POSTFIELDS, $post_array);
-        $this->html = curl_exec($this->curl);
 
-        return $this->html;
+        curl_close($curl);
+
+        if (!$ignore_errors && ($return_code < 200 || $return_code >= 400)) {
+            throw new RuntimeException("Action $action (POST) failed with return code $return_code");
+        }
+
+        if (!$ignore_errors && !$this->checkResponse($html)) {
+            throw new RuntimeException("Action $action (POST) reported error");
+        }
+
+        return $html;
     }
 
-    private function _response($html)
+    private function performGetRequest(string $action, array $args = [], bool $ignore_errors = false): string
+    {
+        $args['action'] = $action;
+        $url = $this->admin_url . ($args ? "?" . http_build_query($args) : '');
+
+        $curl = curl_init();
+
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_COOKIEJAR, $this->cookie_file);
+        curl_setopt($curl, CURLOPT_COOKIEFILE, $this->cookie_file);
+
+        curl_setopt($curl, CURLOPT_URL, $url);
+
+        $html = curl_exec($curl);
+        $return_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+
+        if ($this->debug) {
+            var_dump("GET: $url -> $return_code");
+        }
+
+        curl_close($curl);
+
+        if (!$ignore_errors && ($return_code < 200 || $return_code >= 400)) {
+            throw new RuntimeException("Action $action (GET) failed with return code $return_code");
+        }
+
+        if (!$ignore_errors && !$this->checkResponse($html)) {
+            throw new RuntimeException("Action $action (GET) reported error");
+        }
+
+        return $html;
+    }
+
+    private function checkResponse(string $html): bool
     {
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
-        $this->response = trim(utf8_encode($htmldom->find('td[class=systembesked]', 0)->innertext));
-        $positive_messages = ['successfyldt', 'er oprettet', 'er slettet', $this->domain];
-        foreach ($positive_messages as $positive_message) {
-            if (strstr($this->response, $positive_message)) {
-                return true;
-            }
-        }
-
-        return false;
+        return !$htmldom->find('td[class=table-danger],div[class=alert]', 0);
     }
 
-    private function error($response)
+    private function lookupRecord(int $recordid): ?array
     {
-        $this->response = $response;
-
-        return false;
-    }
-
-    private function lookupRecord($recordid)
-    {
-
         if (0 == $recordid) {
             // We dont want to match NS records
-            throw new \Exception('Record may not be 0');
+            throw new InvalidArgumentException('Record id may not be 0');
         }
 
-        foreach ($this->records as $host) {
-            foreach ($host as $type) {
-                foreach ($type as $record) {
-                    if ($recordid == $record['recordid']) {
-                        return $record;
+        foreach ($this->records as $domain) {
+            foreach ($domain as $type) {
+                foreach ($type as $host) {
+                    if ($recordid == $host['recordid']) {
+                        return $host;
                     }
                 }
             }
         }
 
-        return false;
+        return null;
+    }
+
+    private function performLogin(): void
+    {
+        $html = $this->performPostRequest('',
+            [ 'login' => $this->username, 'password' => $this->password, 'action' => 'logmein'],
+            true);
+
+        if (!$this->checkResponse($html)) {
+            throw new RuntimeException('Login failed');
+        }
+    }
+
+    private function getRawTxtData(string $domain, int $recordid): string
+    {
+        $html = $this->performGetRequest('dns_primary_record_edit_txt', ['id' => $recordid, 'user_domain' => $domain]);
+        $htmldom = new simple_html_dom();
+        $htmldom->load($html);
+        return trim($htmldom->find('input[name=txtdata]', 0)->attr['value']);
+    }
+
+    /**
+     * @return bool
+     */
+    public function isDebug(): bool
+    {
+        return $this->debug;
+    }
+
+    /**
+     * @param bool $debug
+     */
+    public function setDebug(bool $debug): void
+    {
+        $this->debug = $debug;
     }
 }
-

@@ -13,7 +13,12 @@
             "role": "Developer"
         }
     ],
-    "suggest": {
+    "config": {
+        "platform": {
+            "php": "7.2"
+        }
+    },
+    "require": {
         "ext-curl": "*"
     },
     "autoload": {
