@@ -51,6 +51,15 @@ class GratisDNS
      */
     private $last_error_message;
 
+    /**
+     * GratisDNS constructor.
+     *
+     * @param string $username
+     * @param string $password
+     * @param bool   $debug
+     *
+     * @throws Exception
+     */
     function __construct(string $username, string $password, bool $debug = false)
     {
         require_once __DIR__ . '/simple_html_dom.php';
@@ -68,6 +77,11 @@ class GratisDNS
         $this->performLogin();
     }
 
+    /**
+     * Get list of all domains in account
+     *
+     * @return string[]
+     */
     public function getDomains(): array
     {
         $html = $this->performGetRequest('dns_primary_changeDNSsetup');
@@ -85,6 +99,15 @@ class GratisDNS
         return $this->domains;
     }
 
+    /**
+     * Get the first resource record that matches parameters
+     *
+     * @param string $domain
+     * @param string $type
+     * @param string $host
+     *
+     * @return array|null
+     */
     public function getRecordByDomain(string $domain, string $type, string $host): ?array
     {
         if (empty($this->records[$domain])) {
@@ -108,6 +131,14 @@ class GratisDNS
         }
     }
 
+    /**
+     * Get resource record with specified ID (or null)
+     *
+     * @param string $domain
+     * @param int    $id
+     *
+     * @return array|null
+     */
     public function getRecordById(string $domain, int $id): ?array
     {
         if (empty($this->records[$domain])) {
@@ -117,6 +148,13 @@ class GratisDNS
         return $this->lookupRecord($id);
     }
 
+    /**
+     * Get all resource records for domain
+     *
+     * @param string $domain
+     *
+     * @return array
+     */
     public function getRecords(string $domain): array
     {
         $html = $this->performGetRequest('dns_primary_changeDNSsetup', ['user_domain' => $domain]);
@@ -127,22 +165,26 @@ class GratisDNS
         foreach ($htmldom->find('div[class=dns-records]') as $div) {
             /** @var simple_html_dom_node $div */
             $type = strtok($div->find('div[class=d-flex] h2', 0)->innertext(), ' ');
-            if (!in_array($type, ['A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'])) {
+            if (! in_array($type, ['A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'])) {
                 continue;
             }
             foreach ($div->find('tbody tr') as $tr) {
                 /** @var simple_html_dom_node $tr */
-                $editlink = $tr->find('a[class=btn]', 0);
-                if (empty($editlink)) {
+                $btngroup = $tr->find('div[class=btn-group]', 0);
+                if (empty($btngroup)) {
                     # Skip header rows
                     continue;
                 }
                 if (! isset($this->records[$domain][$type])) {
                     $this->records[$domain][$type] = [];
                 }
-                parse_str($editlink->attr['href'], $editparams);
-                $recordid = (int)$editparams['id'];
-
+                $editlink = $tr->find('a[class=btn]', 0);
+                if ($editlink) {
+                    parse_str($editlink->attr['href'], $editparams);
+                    $recordid = (int) $editparams['id'];
+                } else {
+                    $recordid = null;
+                }
                 $tds = $tr->find('td');
 
                 $host = (in_array($type, [
@@ -150,9 +192,13 @@ class GratisDNS
                     'SRV',
                     'TXT',
                     'MX',
+                    'A',
+                    'AAAA'
                 ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext());
                 $this->records[$domain][$type][$host]['type'] = $type;
-                $this->records[$domain][$type][$host]['recordid'] = $recordid;
+                if ($recordid) {
+                    $this->records[$domain][$type][$host]['recordid'] = $recordid;
+                }
                 $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext());
                 $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext());
                 switch ($type) {
@@ -169,7 +215,7 @@ class GratisDNS
                         break;
                     case 'MX':
                     case 'AFSDB':
-                        # Work around inconsistency in output
+                        # Work around inconsistency of output
                         $this->records[$domain][$type][$host]['data'] = trim(strip_tags(utf8_encode($tds[1]->innertext())));
                         $this->records[$domain][$type][$host]['preference'] = $tds[2]->innertext();
                         $this->records[$domain][$type][$host]['ttl'] = (int) $tds[3]->innertext();
@@ -183,7 +229,7 @@ class GratisDNS
                     case 'SSHFP':
                         //Not supported
                         break;
-                        // TODO: Support CAA records
+                    // TODO: Support CAA records
                 }
             }
         }
@@ -191,88 +237,100 @@ class GratisDNS
         return $this->records[$domain];
     }
 
+    /**
+     * Create domain
+     *
+     * @param string $domain
+     *
+     * @return void
+     */
     public function createDomain(string $domain): void
     {
-        $this->performPostRequest('dns_primary_createprimaryandsecondarydnsforthisdomain', [ 'user_domain' => $domain ]);
-    }
-
-    public function deleteDomain(string $domain): void
-    {
-        $this->performPostRequest('dns_primary_delete', [ 'user_domain' => $domain ]);
+        $this->performPostRequest('dns_primary_createprimaryandsecondarydnsforthisdomain', ['user_domain' => $domain]);
     }
 
     /**
+     * Delete domain
      *
-     * @param string  $domain
-     * @param string  $type
-     * @param string  $host
-     * @param string  $data
-     * @param integer $ttl Use with caution. Some guess work is involved and we may end up setting TTL on the wrong record
-     * @param string  $preference
-     * @param integer $weight
-     * @param integer $port
+     * @param string $domain
      *
-     * @return boolean
+     * @return void
+     */
+    public function deleteDomain(string $domain): void
+    {
+        $this->performPostRequest('dns_primary_delete', ['user_domain' => $domain]);
+    }
+
+    /**
+     * Create resource record
+     *
+     * @param string         $domain
+     * @param string         $type
+     * @param string         $host
+     * @param string         $data
+     * @param integer        $ttl
+     * @param string         $preference_or_algorithm
+     * @param integer|string $weight_or_type
+     * @param integer        $port
+     *
+     * @return void
      */
     function createRecord(
-        $domain,
-        $type,
-        $host,
-        $data,
-        $ttl = false,
-        $preference = false,
-        $weight = false,
-        $port = false
-    ) {
+        string $domain,
+        string $type,
+        string $host,
+        string $data,
+        int $ttl = 43200,
+        ?string $preference_or_algorithm = null,
+        $weight_or_type = false,
+        ?int $port = null
+    ): void {
         $post_array = [
-            'action'      => 'add' . strtolower($type) . 'record',
             'user_domain' => $domain,
+            'name'        => $host,
+            'ttl'         => $ttl,
         ];
         switch ($type) {
             case 'A':
             case 'AAAA':
-                $post_array['host'] = $host;
                 $post_array['ip'] = $data;
                 break;
             case 'CNAME':
-                $post_array['host'] = $host;
-                $post_array['kname'] = $data;
+                $post_array['name'] = $host;
+                $post_array['cname'] = $data;
                 break;
             case 'MX':
             case 'AFSDB':
-                $post_array['host'] = $host;
+                $post_array['name'] = $host;
                 $post_array['exchanger'] = $data;
-                $post_array['preference'] = $preference;
+                $post_array['preference'] = $preference_or_algorithm;
                 break;
             case 'TXT':
+                $post_array['name'] = $host;
+                $post_array['txtdata'] = $data;
+                break;
             case 'NS':
-                $post_array['leftRR'] = $host;
-                $post_array['rightRR'] = $data;
+                $post_array['name'] = $host;
+                $post_array['nsdname'] = $data;
                 break;
             case 'SRV':
-                $post_array['host'] = $host;
-                $post_array['exchanger'] = $data;
-                $post_array['preference'] = $preference;
-                $post_array['weight'] = $weight;
+                $post_array['name'] = $host;
+                $post_array['target'] = $data;
+                $post_array['priority'] = $preference_or_algorithm;
+                $post_array['weight'] = $weight_or_type;
                 $post_array['port'] = $port;
                 break;
             case 'SSHFP':
-                $post_array['host'] = $host;
-                $post_array['rightRR'] = $data;
-                $post_array['preference'] = $preference;
-                $post_array['weight'] = $weight;
+                // Parameter names do not make sense. Oh well.
+                $post_array['name'] = $host;
+                $post_array['sshfp'] = $data;
+                $post_array['algorithm'] = $preference_or_algorithm;
+                $post_array['type'] = $weight_or_type;
                 break;
+            default:
+                throw new InvalidArgumentException("Unsupported record type $type");
         }
-        $html = $this->performPostRequest('todo', $post_array);
-        $response = $this->checkResponse($html);
-        if ($response && $ttl) {
-            // Here be Dragons, recommend not to use this feature.
-            $record = $this->getRecordByDomain($domain, $type, $host);
-
-            return $this->updateRecord($domain, $record['recordid'], $type, $host, $data, $ttl);
-        } else {
-            return $response;
-        }
+        $this->performPostRequest('dns_primary_record_added_' . strtolower($type), $post_array);
     }
 
     /**
@@ -389,25 +447,35 @@ class GratisDNS
      * @param string  $domain   Domain name
      * @param integer $recordid Record to be deleted
      *
-     * @return
+     * @throws DomainException If record not found
+     * @return void
      */
     function deleteRecord(string $domain, int $recordid): void
     {
         $record = $this->getRecordById($domain, $recordid);
-        if (!$record) {
-            throw new RuntimeException("Record with id $recordid not fount for domain $domain");
+        if (! $record) {
+            throw new DomainException("Record with id $recordid not found for domain $domain");
         }
 
         $type = $record['type'];
 
         $params = [
             'user_domain' => $domain,
-            'recordid'    => $recordid
+            'recordid'    => $recordid,
         ];
 
-        $this->performPostRequest('dns_primary_delete_' . lc($type), $params);
+        $this->performPostRequest('dns_primary_delete_' . strtolower($type), $params);
     }
 
+    /**
+     * Send POST request to GratisDNS and (optionally) check output for errors
+     *
+     * @param string $action
+     * @param array  $args
+     * @param bool   $ignore_errors
+     *
+     * @return string Response HTML
+     */
     private function performPostRequest(string $action, array $args = [], bool $ignore_errors = false): string
     {
         $url = $this->admin_url . ($action ? "?action=" . urlencode($action) : '');
@@ -432,17 +500,26 @@ class GratisDNS
 
         curl_close($curl);
 
-        if (!$ignore_errors && ($return_code < 200 || $return_code >= 400)) {
+        if (! $ignore_errors && ($return_code < 200 || $return_code >= 400)) {
             throw new RuntimeException("Action $action (POST) failed with return code $return_code");
         }
 
-        if (!$ignore_errors && !$this->checkResponse($html)) {
+        if (! $ignore_errors && ! $this->checkResponse($html)) {
             throw new RuntimeException("Action $action (POST) reported error: {$this->last_error_message}");
         }
 
         return $html;
     }
 
+    /**
+     * Send GET request to GratisDNS and (optionally) check output for errors
+     *
+     * @param string $action
+     * @param array  $args
+     * @param bool   $ignore_errors
+     *
+     * @return string Response HTML
+     */
     private function performGetRequest(string $action, array $args = [], bool $ignore_errors = false): string
     {
         $args['action'] = $action;
@@ -465,17 +542,24 @@ class GratisDNS
 
         curl_close($curl);
 
-        if (!$ignore_errors && ($return_code < 200 || $return_code >= 400)) {
+        if (! $ignore_errors && ($return_code < 200 || $return_code >= 400)) {
             throw new RuntimeException("Action $action (GET) failed with return code $return_code");
         }
 
-        if (!$ignore_errors && !$this->checkResponse($html)) {
+        if (! $ignore_errors && ! $this->checkResponse($html)) {
             throw new RuntimeException("Action $action (GET) reported error: {$this->last_error_message}");
         }
 
         return $html;
     }
 
+    /**
+     * Check response HTML for errors and set error string
+     *
+     * @param string $html
+     *
+     * @return bool Does response indicate success?
+     */
     private function checkResponse(string $html): bool
     {
         $htmldom = new simple_html_dom();
@@ -488,9 +572,17 @@ class GratisDNS
         } else {
             $this->last_error_message = null;
         }
-        return !$error_element;
+
+        return ! $error_element;
     }
 
+    /**
+     * Search record cache for record with given ID
+     *
+     * @param int $recordid
+     *
+     * @return array|null
+     */
     private function lookupRecord(int $recordid): ?array
     {
         if (0 == $recordid) {
@@ -500,9 +592,9 @@ class GratisDNS
 
         foreach ($this->records as $domain) {
             foreach ($domain as $type) {
-                foreach ($type as $host) {
-                    if ($recordid == $host['recordid']) {
-                        return $host;
+                foreach ($type as $record) {
+                    if ($recordid == $record['recordid']) {
+                        return $record;
                     }
                 }
             }
@@ -511,22 +603,36 @@ class GratisDNS
         return null;
     }
 
+    /**
+     * Perform login to GratisDNS
+     *
+     * @return void
+     */
     private function performLogin(): void
     {
         $html = $this->performPostRequest('',
-            [ 'login' => $this->username, 'password' => $this->password, 'action' => 'logmein'],
+            ['login' => $this->username, 'password' => $this->password, 'action' => 'logmein'],
             true);
 
-        if (!$this->checkResponse($html)) {
+        if (! $this->checkResponse($html)) {
             throw new RuntimeException('Login failed');
         }
     }
 
+    /**
+     * Get value of TXT record (helper for getRecords)
+     *
+     * @param string $domain
+     * @param int    $recordid
+     *
+     * @return string
+     */
     private function getRawTxtData(string $domain, int $recordid): string
     {
         $html = $this->performGetRequest('dns_primary_record_edit_txt', ['id' => $recordid, 'user_domain' => $domain]);
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
+
         return trim($htmldom->find('input[name=txtdata]', 0)->attr['value']);
     }
 }
