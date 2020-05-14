@@ -11,25 +11,52 @@
 
 class GratisDNS
 {
+    /**
+     * @var string
+     */
     private $username;
 
+    /**
+     * @var string
+     */
     private $password;
 
+    /**
+     * @var string
+     */
     private $cookie_file;
 
+    /**
+     * @var string
+     */
     private $admin_url = 'https://admin.gratisdns.com';
 
+    /**
+     * @var string[]
+     */
     public $domains = null;
 
+    /**
+     * @var array
+     */
     public $records = null;
 
+    /**
+     * @var bool
+     */
     private $debug = false;
 
-    function __construct(string $username, string $password)
+    /**
+     * @var string|null
+     */
+    private $last_error_message;
+
+    function __construct(string $username, string $password, bool $debug = false)
     {
         require_once __DIR__ . '/simple_html_dom.php';
         $this->username = $username;
         $this->password = $password;
+        $this->debug = $debug;
 
         $this->cookie_file = tempnam('/tmp', 'cookie');
         register_shutdown_function('unlink', $this->cookie_file);
@@ -99,7 +126,7 @@ class GratisDNS
         $this->records[$domain] = [];
         foreach ($htmldom->find('div[class=dns-records]') as $div) {
             /** @var simple_html_dom_node $div */
-            $type = strtok($div->find('div[class=d-flex] h2', 0)->innertext, ' ');
+            $type = strtok($div->find('div[class=d-flex] h2', 0)->innertext(), ' ');
             if (!in_array($type, ['A', 'AAAA', 'CNAME', 'MX', 'AFSDB', 'TXT', 'NS', 'SRV', 'SSHFP'])) {
                 continue;
             }
@@ -123,11 +150,11 @@ class GratisDNS
                     'SRV',
                     'TXT',
                     'MX',
-                ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext);
+                ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext());
                 $this->records[$domain][$type][$host]['type'] = $type;
                 $this->records[$domain][$type][$host]['recordid'] = $recordid;
-                $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext);
-                $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext);
+                $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext());
+                $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext());
                 switch ($type) {
                     case 'TXT':
                         # Data field may be truncated on the overview page ...
@@ -138,20 +165,20 @@ class GratisDNS
                     case 'AAAA':
                     case 'CNAME':
                     case 'NS':
-                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[2]->innertext;
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[2]->innertext();
                         break;
                     case 'MX':
                     case 'AFSDB':
                         # Work around inconsistency in output
-                        $this->records[$domain][$type][$host]['data'] = trim(strip_tags(utf8_encode($tds[1]->innertext)));
-                        $this->records[$domain][$type][$host]['preference'] = $tds[2]->innertext;
-                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[3]->innertext;
+                        $this->records[$domain][$type][$host]['data'] = trim(strip_tags(utf8_encode($tds[1]->innertext())));
+                        $this->records[$domain][$type][$host]['preference'] = $tds[2]->innertext();
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[3]->innertext();
                         break;
                     case 'SRV':
-                        $this->records[$domain][$type][$host]['priority'] = $tds[2]->innertext;
-                        $this->records[$domain][$type][$host]['weight'] = (int) $tds[3]->innertext;
-                        $this->records[$domain][$type][$host]['port'] = (int) $tds[4]->innertext;
-                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[5]->innertext;
+                        $this->records[$domain][$type][$host]['priority'] = $tds[2]->innertext();
+                        $this->records[$domain][$type][$host]['weight'] = (int) $tds[3]->innertext();
+                        $this->records[$domain][$type][$host]['port'] = (int) $tds[4]->innertext();
+                        $this->records[$domain][$type][$host]['ttl'] = (int) $tds[5]->innertext();
                         break;
                     case 'SSHFP':
                         //Not supported
@@ -166,7 +193,7 @@ class GratisDNS
 
     public function createDomain(string $domain): void
     {
-        $this->performPostRequest('createprimaryandsecondarydnsforthisdomain', [ 'user_domain' => $domain ]);
+        $this->performPostRequest('dns_primary_createprimaryandsecondarydnsforthisdomain', [ 'user_domain' => $domain ]);
     }
 
     public function deleteDomain(string $domain): void
@@ -410,7 +437,7 @@ class GratisDNS
         }
 
         if (!$ignore_errors && !$this->checkResponse($html)) {
-            throw new RuntimeException("Action $action (POST) reported error");
+            throw new RuntimeException("Action $action (POST) reported error: {$this->last_error_message}");
         }
 
         return $html;
@@ -443,7 +470,7 @@ class GratisDNS
         }
 
         if (!$ignore_errors && !$this->checkResponse($html)) {
-            throw new RuntimeException("Action $action (GET) reported error");
+            throw new RuntimeException("Action $action (GET) reported error: {$this->last_error_message}");
         }
 
         return $html;
@@ -453,7 +480,15 @@ class GratisDNS
     {
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
-        return !$htmldom->find('td[class=table-danger],div[class=alert]', 0);
+        $error_element = $htmldom->find('td[class=table-danger],div[class=alert]', 0);
+
+        if ($error_element) {
+            /** @var simple_html_dom_node $error_element */
+            $this->last_error_message = $error_element->innertext();
+        } else {
+            $this->last_error_message = null;
+        }
+        return !$error_element;
     }
 
     private function lookupRecord(int $recordid): ?array
@@ -493,21 +528,5 @@ class GratisDNS
         $htmldom = new simple_html_dom();
         $htmldom->load($html);
         return trim($htmldom->find('input[name=txtdata]', 0)->attr['value']);
-    }
-
-    /**
-     * @return bool
-     */
-    public function isDebug(): bool
-    {
-        return $this->debug;
-    }
-
-    /**
-     * @param bool $debug
-     */
-    public function setDebug(bool $debug): void
-    {
-        $this->debug = $debug;
     }
 }
