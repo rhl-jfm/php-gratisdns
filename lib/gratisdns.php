@@ -1,14 +1,19 @@
 <?php
 /**
  * ProjectName: php-gratisdns
- * Plugin URI: http://github.com/kasperhartwich/php-gratisdns
+ * Plugin URI: https://github.com/rhl-jfm/php-gratisdns
  * Description: Altering your DNS records at GratisDNS
  *
+ * @author  René Højbjerg Larsen <rhl@jfmedier.dk>
  * @author  Kasper Hartwich <kasper@hartwich.net>
  * @package php-gratisdns
- * @version 0.9.3
+ * @version 2.0
  */
 
+/*
+ * Random note: Updating a record changes it ID, which may cause subsequent
+ * calls to updateRecord() or deleteRecord() to fail.
+ */
 class GratisDNS
 {
     /**
@@ -183,7 +188,7 @@ class GratisDNS
                     parse_str($editlink->attr['href'], $editparams);
                     $recordid = (int) $editparams['id'];
                 } else {
-                    $recordid = null;
+                    $recordid = 0;
                 }
                 $tds = $tr->find('td');
 
@@ -193,15 +198,14 @@ class GratisDNS
                     'TXT',
                     'MX',
                     'A',
-                    'AAAA'
+                    'AAAA',
                 ])) ? count($this->records[$domain][$type]) : utf8_encode($tds[0]->innertext());
                 $this->records[$domain][$type][$host]['type'] = $type;
-                if ($recordid) {
-                    $this->records[$domain][$type][$host]['recordid'] = $recordid;
-                }
+                $this->records[$domain][$type][$host]['recordid'] = $recordid;
                 $this->records[$domain][$type][$host]['host'] = utf8_encode($tds[0]->innertext());
                 $this->records[$domain][$type][$host]['data'] = utf8_encode($tds[1]->innertext());
                 switch ($type) {
+                    /** @noinspection PhpMissingBreakStatementInspection */
                     case 'TXT':
                         # Data field may be truncated on the overview page ...
                         if (substr($this->records[$domain][$type][$host]['data'], -3, 3) == '...') {
@@ -226,10 +230,10 @@ class GratisDNS
                         $this->records[$domain][$type][$host]['port'] = (int) $tds[4]->innertext();
                         $this->records[$domain][$type][$host]['ttl'] = (int) $tds[5]->innertext();
                         break;
-                    case 'SSHFP':
+                    default:
                         //Not supported
                         break;
-                    // TODO: Support CAA records
+                    // TODO: Support CAA, SSHFP records
                 }
             }
         }
@@ -281,9 +285,9 @@ class GratisDNS
         string $host,
         string $data,
         int $ttl = 43200,
-        ?string $preference_or_algorithm = null,
-        $weight_or_type = false,
-        ?int $port = null
+        string $preference_or_algorithm = null,
+        $weight_or_type = null,
+        int $port = null
     ): void {
         $post_array = [
             'user_domain' => $domain,
@@ -296,33 +300,26 @@ class GratisDNS
                 $post_array['ip'] = $data;
                 break;
             case 'CNAME':
-                $post_array['name'] = $host;
                 $post_array['cname'] = $data;
                 break;
             case 'MX':
             case 'AFSDB':
-                $post_array['name'] = $host;
                 $post_array['exchanger'] = $data;
                 $post_array['preference'] = $preference_or_algorithm;
                 break;
             case 'TXT':
-                $post_array['name'] = $host;
                 $post_array['txtdata'] = $data;
                 break;
             case 'NS':
-                $post_array['name'] = $host;
                 $post_array['nsdname'] = $data;
                 break;
             case 'SRV':
-                $post_array['name'] = $host;
                 $post_array['target'] = $data;
                 $post_array['priority'] = $preference_or_algorithm;
                 $post_array['weight'] = $weight_or_type;
                 $post_array['port'] = $port;
                 break;
             case 'SSHFP':
-                // Parameter names do not make sense. Oh well.
-                $post_array['name'] = $host;
                 $post_array['sshfp'] = $data;
                 $post_array['algorithm'] = $preference_or_algorithm;
                 $post_array['type'] = $weight_or_type;
@@ -334,111 +331,74 @@ class GratisDNS
     }
 
     /**
-     * @param string  $domain
-     * @param integer $recordid
-     * @param string  $type
-     * @param string  $host
-     * @param type    $data
-     * @param type    $ttl
+     * @param string         $domain
+     * @param integer        $recordid
+     * @param string         $host
+     * @param string         $data
+     * @param integer        $ttl
+     * @param string         $preference_or_algorithm
+     * @param integer|string $weight_or_type
+     * @param integer        $port
      *
-     * @return boolean
+     * @return void
      */
-    public function updateRecord($domain, $recordid, $type = false, $host = false, $data = false, $ttl = false)
-    {
+    public function updateRecord(
+        string $domain,
+        int $recordid,
+        string $host,
+        string $data,
+        int $ttl = 43200,
+        string $preference_or_algorithm = null,
+        $weight_or_type = null,
+        int $port = null
+    ): void {
+        $record = $this->getRecordById($domain, $recordid);
+        if (! $record) {
+            throw new DomainException("Record id not found: $recordid");
+        }
+        $type = $record['type'];
+
         $post_array = [
-            'action'      => 'makechangesnow',
             'user_domain' => $domain,
-            'recordid'    => $recordid,
+            'name'        => $host,
+            'ttl'         => $ttl,
+            'id'          => $recordid,
         ];
 
-        if ($type) {
-            $post_array['type'] = $type;
-        } else {
-            $record = $this->getRecordById($domain, $recordid);
-            if (! $record) {
-                return false;
-            }
-            $post_array['type'] = $record['type'];
-            $type = $record['type'];
-        }
-        if ($host) {
-            $post_array['host'] = $host;
-        } else {
-            $record = $this->getRecordById($domain, $recordid);
-            if (! $record) {
-                return false;
-            }
-            $post_array['host'] = $record['host'];
-        }
         switch ($type) {
             case 'A':
             case 'AAAA':
-            case 'MX':
-            case 'CNAME':
-            case 'TXT':
-            case 'AFSDB':
-                if (! $ttl) {
-                    $record = $this->getRecordById($domain, $recordid);
-                    if (! $record) {
-                        return false;
-                    }
-                    $ttl = $record['ttl'];
-                }
-                $post_array['new_data'] = $data;
-                $post_array['new_ttl'] = $ttl;
+                $post_array['ip'] = $data;
                 break;
-            case 'SRV':
-                $post_array['new_ttl'] = $ttl;
+            case 'CNAME':
+                $post_array['cname'] = $data;
+                break;
+            case 'MX':
+            case 'AFSDB':
+                $post_array['exchanger'] = $data;
+                $post_array['preference'] = $preference_or_algorithm;
+                break;
+            case 'TXT':
+                $post_array['txtdata'] = $data;
                 break;
             case 'NS':
-                return $this->error('Updating NS record is not supported by GratisDNS.');
+                $post_array['nsdname'] = $data;
+                break;
+            case 'SRV':
+                $post_array['target'] = $data;
+                $post_array['priority'] = $preference_or_algorithm;
+                $post_array['weight'] = $weight_or_type;
+                $post_array['port'] = $port;
+                break;
             case 'SSHFP':
-                return $this->error('Not supported.');
-        }
-        $html = $this->performPostRequest('todo', $post_array);
-
-        return $this->checkResponse($html);
-    }
-
-    function applyTemplate($domain, $template, $ttl = false)
-    {
-        switch ($template) {
-            //Feel free to fork and add other templates. :)
-            case 'googleapps':
-                $this->createRecord($domain, 'MX', $domain, 'aspmx.l.google.com', $ttl, 1);
-                $this->createRecord($domain, 'MX', $domain, 'alt1.aspmx.l.google.com', $ttl, 5);
-                $this->createRecord($domain, 'MX', $domain, 'alt2.aspmx.l.google.com', $ttl, 5);
-                $this->createRecord($domain, 'MX', $domain, 'aspmx2.googlemail.com', $ttl, 10);
-                $this->createRecord($domain, 'MX', $domain, 'aspmx3.googlemail.com', $ttl, 10);
-                $this->createRecord($domain, 'CNAME', 'mail.' . $domain, 'ghs.google.com', $ttl);
-                $this->createRecord($domain, 'CNAME', 'start.' . $domain, 'ghs.google.com', $ttl);
-                $this->createRecord($domain, 'CNAME', 'calendar.' . $domain, 'ghs.google.com', $ttl);
-                $this->createRecord($domain, 'CNAME', 'docs.' . $domain, 'ghs.google.com', $ttl);
-                $this->createRecord($domain, 'CNAME', 'sites.' . $domain, 'ghs.google.com', $ttl);
-                $this->createRecord($domain, 'SRV', '_jabber._tcp.' . $domain, 'xmpp-server.l.google.com', $ttl, 5, 0,
-                    5269);
-                $this->createRecord($domain, 'SRV', '_jabber._tcp.' . $domain, 'xmpp-server1.l.google.com', $ttl, 20, 0,
-                    5269);
-                $this->createRecord($domain, 'SRV', '_jabber._tcp.' . $domain, 'xmpp-server2.l.google.com', $ttl, 20, 0,
-                    5269);
-                $this->createRecord($domain, 'SRV', '_jabber._tcp.' . $domain, 'xmpp-server3.l.google.com', $ttl, 20, 0,
-                    5269);
-                $this->createRecord($domain, 'SRV', '_jabber._tcp.' . $domain, 'xmpp-server4.l.google.com', $ttl, 20, 0,
-                    5269);
-                $this->createRecord($domain, 'SRV', '_xmpp-server._tcp.' . $domain, 'xmpp-server.l.google.com', $ttl, 5,
-                    0, 5269);
-                $this->createRecord($domain, 'SRV', '_xmpp-server._tcp.' . $domain, 'xmpp-server1.l.google.com', $ttl,
-                    20, 0, 5269);
-                $this->createRecord($domain, 'SRV', '_xmpp-server._tcp.' . $domain, 'xmpp-server2.l.google.com', $ttl,
-                    20, 0, 5269);
-                $this->createRecord($domain, 'SRV', '_xmpp-server._tcp.' . $domain, 'xmpp-server3.l.google.com', $ttl,
-                    20, 0, 5269);
-                $this->createRecord($domain, 'SRV', '_xmpp-server._tcp.' . $domain, 'xmpp-server4.l.google.com', $ttl,
-                    20, 0, 5269);
+                $post_array['sshfp'] = $data;
+                $post_array['algorithm'] = $preference_or_algorithm;
+                $post_array['type'] = $weight_or_type;
                 break;
             default:
-                return error('Unknown template');
+                throw new InvalidArgumentException("Unsupported record type $type");
         }
+        $this->performPostRequest('dns_primary_record_update_' . strtolower($type), $post_array);
     }
 
     /**
@@ -447,8 +407,8 @@ class GratisDNS
      * @param string  $domain   Domain name
      * @param integer $recordid Record to be deleted
      *
-     * @throws DomainException If record not found
      * @return void
+     * @throws DomainException If record not found
      */
     function deleteRecord(string $domain, int $recordid): void
     {
@@ -461,7 +421,7 @@ class GratisDNS
 
         $params = [
             'user_domain' => $domain,
-            'recordid'    => $recordid,
+            'id'          => $recordid,
         ];
 
         $this->performPostRequest('dns_primary_delete_' . strtolower($type), $params);

@@ -20,19 +20,19 @@ $dns->deleteDomain('test123.dk');
 
 //Create records for domain
 $dns->createRecord('test123.dk', 'A', 'www.test123.dk', '127.0.0.1', 3600);
+$dns->createRecord('test123.dk', 'AAAA', 'www.test123.dk', '::1', 3600);
 
 //Get recordid+domainid - also available in getRecords
 $record = $dns->getRecordByDomain('test123.dk', 'A', 'www.test123.dk');
-$domainid = $dns->getDomainId('test123.dk');
 
 //Update record
 $dns->updateRecord('test123.dk', $record['recordid'], 'A', 'www.test123.dk', '127.0.0.2', 4800);
 
-//Delete record
-$dns->deleteRecord($domainid, $record['recordid'], 'A');
+//Get recordid+domainid - also available in getRecords
+$record = $dns->getRecordByDomain('test123.dk', 'AAAA', 'www.test123.dk');
 
-//Use template 'googleapps' to add mxrecords for use with Google Apps
-$dns->applyTemplate('test123.dk', 'googleapps');
+//Delete record
+$dns->deleteRecord('test123.dk', $record['recordid']);
 
 //Get text response from GratisDNS. (Often empty)
 echo $dns->getResponse();
