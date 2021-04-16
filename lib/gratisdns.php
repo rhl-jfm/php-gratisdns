@@ -104,6 +104,37 @@ class GratisDNS
         return $this->domains;
     }
 
+    public function exportDomain(string $domain): string
+    {
+        $url = $this->admin_url . '/dzshow.php?' . http_build_query(['user_domain' => $domain]);
+
+        $curl = curl_init();
+
+        curl_setopt($curl, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($curl, CURLOPT_COOKIEJAR, $this->cookie_file);
+        curl_setopt($curl, CURLOPT_COOKIEFILE, $this->cookie_file);
+
+        curl_setopt($curl, CURLOPT_URL, $url);
+
+        $raw = curl_exec($curl);
+        // Really ugly, but this is what is takes to transform html export into plain text
+        $export_data = preg_replace('/^<br>(# show zone .*)<br>/m', "\n\$1\n", preg_replace('/\n<br>/m', "\n", $raw));
+
+        if ($this->debug) {
+            $return_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
+            var_dump("GET: $url -> $return_code");
+        }
+
+        curl_close($curl);
+
+        if (!preg_match('/^@ \d+ IN SOA /m', $export_data)) {
+            // No such zone
+            throw new DomainException("Domain not found: $domain");
+        }
+
+        return $export_data;
+    }
+
     /**
      * Get the first resource record that matches parameters
      *
