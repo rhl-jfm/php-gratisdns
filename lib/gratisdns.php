@@ -118,7 +118,11 @@ class GratisDNS
 
         $raw = curl_exec($curl);
         // Really ugly, but this is what is takes to transform html export into plain text
-        $export_data = preg_replace('/^<br>(# show zone .*)<br>/m', "\n\$1\n", preg_replace('/\n<br>/m', "\n", $raw));
+        $string = preg_replace('/\n<br>/m', "\n", $raw);
+        $export_data = preg_replace('/^<br>(# show zone .*)<br>/m', "\n\$1\n", $string, 1, $count);
+        if (!$count) {
+            $export_data = preg_replace('/<br><br>(# show zone .*)<br>/m', "\n\n\$1\n", $string);
+        }
 
         if ($this->debug) {
             $return_code = curl_getinfo($curl, CURLINFO_HTTP_CODE);
@@ -127,7 +131,7 @@ class GratisDNS
 
         curl_close($curl);
 
-        if (!preg_match('/^@ \d+ IN SOA /m', $export_data)) {
+        if (!preg_match('/^(?:@\s+\d+|' . preg_quote($domain, '/') . ')\s+IN\s+SOA\s+/m', $export_data)) {
             // No such zone
             throw new DomainException("Domain not found: $domain");
         }
