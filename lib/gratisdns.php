@@ -131,7 +131,7 @@ class GratisDNS
 
         curl_close($curl);
 
-        if (!preg_match('/^(?:@\s+\d+|' . preg_quote($domain, '/') . ')\s+IN\s+SOA\s+/m', $export_data)) {
+        if (!preg_match('/^(?:@|' . preg_quote($domain, '/') . '\.?)(?:\s+\d+)?\s+IN\s+SOA\s+/m', $export_data)) {
             // No such zone
             throw new DomainException("Domain not found: $domain");
         }
